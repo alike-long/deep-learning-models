@@ -1,0 +1,12 @@
+__pycache__/
+.idea/
+*.pth
+*.pt
+*.png
+*.jpg
+*.webp
+data/
+photo/
+01_photo/
+01_data/
+result.jpg
