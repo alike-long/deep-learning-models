@@ -102,8 +102,8 @@ import torchvision.transforms as transforms
 import torchvision.models as models
 
 # ===================== 配置路径（自己改这里）=====================
-CONTENT_IMG_PATH = r"F:\py-code\vection-work\photo\mmexport1756287856301.jpg"  # 内容图路径
-STYLE_IMG_PATH   = r"F:\py-code\vection-work\photo\c8930d77c3ef4a5d889b7c55a9dc29ef~tplv-a9rns2rl98-pc_smart_face_crop-v1_512_384.jpg"    # 风格图路径
+CONTENT_IMG_PATH = r"F:\py-code\vection-work\01_photo\3fe0b70fea02637e5492b4905d905020~tplv-a9rns2rl98-pc_smart_face_crop-v1_512_384.png"  # 内容图（PNG 人像）
+STYLE_IMG_PATH   = r"F:\py-code\vection-work\01_photo\mmexport1756287856301.jpg"    # 风格图（JPG）
 OUTPUT_IMG_PATH  = "result.jpg"   # 输出图路径
 
 # 超参数

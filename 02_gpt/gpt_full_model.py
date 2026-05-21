@@ -192,7 +192,7 @@ class GPT(nn.Module):
     # -------- 因果mask（注册为buffer，跟着模型迁移设备）--------
     def causal_mask(self, T):
         mask = torch.triu(torch.ones(T, T), diagonal=1)   # 上三角=1
-        mask = mask.masked_fill(mask == 1, float('-inf'))  # 1 → -inf
+        mask = mask.masked_fill(mask == 1, float("0"))  # 1 → -inf
         return mask
 
     def forward(self, x):

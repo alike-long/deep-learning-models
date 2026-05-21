@@ -12,11 +12,14 @@ GPT 最简实现 — 纯 Decoder 文本生成
   2. 自回归生成 → 每次只预测下一个词，预测完拼回去再预测下下个
   3. 位置编码 → 告诉模型词的顺序
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ↑ 确保从任意目录运行都能找到同目录下的 gpt_full_model
+
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import math
-import random
+import torch.nn as nn
+from gpt_full_model import GPT
 
 
 # ================================================================
@@ -62,64 +65,10 @@ print(f"训练样本: {x_all.shape[0]} 条, 每条 {seq_len} 个字")
 
 
 # ================================================================
-#  第2部分：GPT 模型
+#  第2部分：GPT 模型（直接用 gpt_full_model 的完整 GPT）
 # ================================================================
-class SimpleGPT(nn.Module):
-    def __init__(self, vocab_size, d_model=128, n_heads=4, n_layers=3):
-        super().__init__()
-
-        # ① 词嵌入 + 位置嵌入
-        # 两个都是 nn.Embedding，训练时一起学
-        self.token_embed = nn.Embedding(vocab_size, d_model)   # 每个字→128维
-        self.pos_embed = nn.Embedding(seq_len, d_model)        # 每个位置→128维
-
-        # ② Decoder 层（nn.TransformerDecoderLayer 带因果mask就是GPT）
-        self.dec_layer = nn.TransformerDecoderLayer(
-            d_model, n_heads, dim_feedforward=512,
-            dropout=0.1, batch_first=True
-        )
-        self.decoder = nn.TransformerDecoder(self.dec_layer, n_layers)
-
-        # ③ 输出头：128维 → 词表大小（每个字的得分）
-        self.fc = nn.Linear(d_model, vocab_size)
-
-        self.d_model = d_model
-
-    # -------- 因果掩码：上三角矩阵 --------
-    def causal_mask(self, sz):
-        """
-        返回 (sz, sz) 的矩阵：
-          [[0, -∞, -∞, -∞],   位置0只能看0
-           [0,  0, -∞, -∞],   位置1只能看0,1
-           [0,  0,  0, -∞],   位置2只能看0,1,2
-           [0,  0,  0,  0]]   位置3可以看全部
-        softmax(+)后，-∞变成0权重，"未来的词"被彻底屏蔽
-        """
-        mask = torch.triu(torch.ones(sz, sz), diagonal=1)  # 上三角=1, 其余=0
-        mask = mask.masked_fill(mask == 1, float('-inf'))  # 1 → -inf
-        return mask
-
-    def forward(self, x):
-        B, T = x.shape  # T = seq_len = 20
-
-        # 位置编号 0~19，每个 sample 都一样
-        pos = torch.arange(T, device=x.device).unsqueeze(0).expand(B, -1)
-
-        # token + 位置 相加 → 乘以 sqrt(d_model) 防梯度消失
-        x = self.token_embed(x) * math.sqrt(self.d_model)
-        x = x + self.pos_embed(pos)
-
-        # 因果 mask：每个位置只能看到自己及左边
-        mask = self.causal_mask(T).to(x.device)
-
-        # Decoder：x 当 query，memory 也用 x 自身（纯 decoder，没 encoder）
-        # 因为 TransformerDecoder 需要 memory 参数（来自encoder），
-        # 但 GPT 没有 encoder，所以把 x 自己填进去，并设为全0
-        memory = torch.zeros(B, 1, self.d_model, device=x.device)
-        x = self.decoder(x, memory, tgt_mask=mask)
-
-        # 映射回词表大小
-        return self.fc(x)  # (B, T, vocab_size)
+# 不用 SimpleGPT 了，直接用手写的 GPT（CausalSelfAttention + Block × N）
+# 导入语句已在文件顶部: from gpt_full_model import GPT
 
 
 # ================================================================
@@ -127,7 +76,7 @@ class SimpleGPT(nn.Module):
 # ================================================================
 def train():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = SimpleGPT(vocab_size).to(device)
+    model = GPT(vocab_size, max_len=seq_len).to(device)   # ★ 模型移到 GPU
     opt = torch.optim.Adam(model.parameters(), lr=0.002)
     loss_fn = nn.CrossEntropyLoss()
 
@@ -158,7 +107,10 @@ def generate(model, device, start_text, max_new=30):
     就像接龙：给定"悲伤的"，预测出"歌"，再给"悲伤的歌"，预测出"越"...
     """
     model.eval()
-    ids = [vocab[c] for c in start_text]        # 开头→id
+    # 如果字不在词表，跳过（避免 KeyError）
+    ids = [vocab[c] for c in start_text if c in vocab]
+    if not ids:
+        return "(开头词语都不在词表中)"
 
     with torch.no_grad():
         for _ in range(max_new):

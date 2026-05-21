@@ -1,0 +1,15 @@
+{
+  "tasks": [
+    {
+      "id": "25054410",
+      "cron": "37 23 * * *",
+      "prompt": "检查 F:\\py-code\\vection-work 目录是否有代码变动，如果有就 add、commit、push 到 GitHub：\n1. cd F:\\py-code\\vection-work\n2. git status --porcelain 看有没有改动\n3. 如果有改动：git add -A && git commit -m \"auto: 每日自动更新\" && git push\n4. 如果没改动：什么都不做\n5. 简要告诉我执行结果（有没有推、推了什么文件）",
+      "createdAt": 1779262808077,
+      "recurring": true,
+      "createdBySessionId": "9e5bb870-0b82-4d28-9a78-a4bb496582f7",
+      "createdByPid": 29472,
+      "createdByProcStart": "639149016087569230",
+      "lastFiredAt": 1779360407943
+    }
+  ]
+}
