@@ -1,195 +1,196 @@
 """
-最简 GAN — 输入 3×3 矩阵，学会乘 2
-=====================================
+DCGAN — 生成 Fashion MNIST 图片
+=================================
+生成器: 随机噪声(100维) → 反卷积 → (1, 28, 28) 假图
+判别器: (1, 28, 28) 图片 → 卷积 → 0(假)/1(真)
 
-玩法：
-  生成器: 拿 3×3 矩阵，试图"猜"它的 ×2 版本
-  判别器: 看到 3×3 矩阵，判断是"真正的 ×2" 还是"生成器伪造的 ×2"
-
-训练到最后：
-  输入 [[1,2,3],[4,5,6],[7,8,9]]
-  生成器输出 ≈ [[2,4,6],[8,10,12],[14,16,18]]
-
-GAN 精髓：生成器想骗过判别器，判别器想识破生成器，双方对抗中一起进步
+训练目标:
+  D: 真图判1，假图判0
+  G: 生成假图，让 D 判为 1（骗过 D）
 """
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
+import matplotlib.pyplot as plt
 
 
 # ================================================================
-#  1. 生成器（Generator）
+#  1. 生成器 — 噪声 → 图片
 # ================================================================
 class Generator(nn.Module):
     """
-    输入:  (B, 9)  3×3 展平
-    输出:  (B, 9)  伪造的 ×2 版本
+    输入: (B, 100, 1, 1)  随机噪声
+    输出: (B, 1, 28, 28)  伪造的灰度图
 
-    就像一个假钞工厂：拿到真钞样式，模仿出假钞
+    ConvTranspose2d = 反卷积：把低分辨率"放大"成高分辨率
+      (1,1) → (7,7) → (14,14) → (28,28)
     """
-    def __init__(self):
+    def __init__(self, noise_dim=100):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(9, 16),      # (B, 9) → (B, 16)
+            # Block1: (B,100,1,1) → (B,256,7,7)
+            nn.ConvTranspose2d(noise_dim, 256, 7, 1, 0),
+            #   in=100 out=256 kernel=7 stride=1 padding=0
+            #   out_size = (1-1)*1 + 7 - 0 = 7
+            nn.BatchNorm2d(256),
             nn.ReLU(),
-            nn.Linear(16, 16),     # (B, 16) → (B, 16)
+
+            # Block2: (B,256,7,7) → (B,128,14,14)
+            nn.ConvTranspose2d(256, 128, 4, 2, 1),
+            #   out_size = (7-1)*2 + 4 - 2*1 = 14
+            nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.Linear(16, 9),      # (B, 16) → (B, 9)  ← 输出也是 9 个数
+
+            # Block3: (B,128,14,14) → (B,1,28,28)
+            nn.ConvTranspose2d(128, 1, 4, 2, 1),
+            #   out_size = (14-1)*2 + 4 - 2*1 = 28
+            nn.Tanh(),          # 压到 [-1, 1]，和真实图归一化一致
         )
 
-    def forward(self, x):
-        # x: (B, 9)  ← 原始 3×3 展平
-        return self.net(x)  # (B, 9)  ← 试图输出 ×2 的值
+    def forward(self, z):
+        # z: (B, 100, 1, 1)  ← 噪声向量加重塑
+        return self.net(z)    # (B, 1, 28, 28)
 
 
 # ================================================================
-#  2. 判别器（Discriminator）
+#  2. 判别器 — 图片 → 真/假
 # ================================================================
 class Discriminator(nn.Module):
     """
-    输入:  (B, 9)  一个 3×3 展平（可能是真 ×2，也可能是假的）
-    输出:  (B, 1)  0~1，0=假，1=真
+    输入: (B, 1, 28, 28)  可能是真图或假图
+    输出: (B, 1)          0~1
 
-    就像一个验钞员：拿到纸币，判断是真钞还是假钞
+    Conv2d：从图片逐层压缩，最后输出一个判断值
+    (28,28) → (14,14) → (7,7) → (1,1) → 得分
     """
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(9, 16),      # (B, 9) → (B, 16)
-            nn.ReLU(),
-            nn.Linear(16, 8),      # (B, 16) → (B, 8)
-            nn.ReLU(),
-            nn.Linear(8, 1),       # (B, 8) → (B, 1)
-            nn.Sigmoid(),          # 压到 0~1
+            # Block1: (B,1,28,28) → (B,64,14,14)
+            nn.Conv2d(1, 64, 4, 2, 1),
+            #   out_size = (28 - 4 + 2*1)/2 + 1 = 14
+            nn.LeakyReLU(0.2),          # GAN 用 LeakyReLU 防神经元死
+
+            # Block2: (B,64,14,14) → (B,128,7,7)
+            nn.Conv2d(64, 128, 4, 2, 1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+
+            # Block3: (B,128,7,7) → (B,256,3,3)
+            nn.Conv2d(128, 256, 3, 2, 1),
+            #   out_size = (7 - 3 + 2*1)/2 + 1 = 3
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            # 最后：自适应池化 → 展开 → 判定
+            nn.AdaptiveAvgPool2d(1),     # (B,256,3,3) → (B,256,1,1)
+            nn.Flatten(),                 # → (B, 256)
+            nn.Linear(256, 1),            # → (B, 1)
+            nn.Sigmoid(),                 # → 0~1
         )
 
     def forward(self, x):
-        # x: (B, 9)
-        return self.net(x)  # (B, 1)
+        return self.net(x)               # (B, 1)
 
 
 # ================================================================
-#  3. 造数据集
-# ================================================================
-def make_batch(batch_size=64):
-    """生成一批数据：随机 3×3 + 真正的 ×2 版本"""
-    # 随机 3×3（值在 0~10 之间）
-    x_real = torch.rand(batch_size, 9) * 10    # (B, 9)    原始矩阵
-    y_real = x_real * 2                         # (B, 9)    真实的 ×2
-
-    return x_real, y_real
-
-
-# ================================================================
-#  4. 训练
+#  3. 训练
 # ================================================================
 def train():
-    G = Generator()
-    D = Discriminator()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    noise_dim = 100
 
-    opt_G = optim.Adam(G.parameters(), lr=0.001)    # 生成器优化器
-    opt_D = optim.Adam(D.parameters(), lr=0.001)    # 判别器优化器
-    loss_fn = nn.BCELoss()                           # 二分类交叉熵
+    # ---- 真数据：Fashion MNIST，归一化到 [-1, 1] ----
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))   # [0,1] → [-1,1]，和 Tanh 对齐
+    ])
+    dataset = datasets.FashionMNIST("../01_data", train=True, download=True, transform=transform)
+    loader = DataLoader(dataset, batch_size=128, shuffle=True)
 
-    print("开始训练 GAN...")
-    for epoch in range(3000):
-        # ---- 每一轮制造一批新数据 ----
-        x_real, y_real = make_batch(batch_size=128)
-        #   x_real: (128, 9)  原始 3×3
-        #   y_real: (128, 9)  真 ×2
+    # ---- 模型 ----
+    G = Generator(noise_dim).to(device)
+    D = Discriminator().to(device)
 
-        # ===== ① 训练判别器 =====
-        # 真样本：判别器应该判为 1
-        real_pred = D(y_real)                              # (128, 1)
-        loss_D_real = loss_fn(real_pred, torch.ones(128, 1))
-        #                                    ↑ 真样本标签=1
+    opt_G = optim.Adam(G.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    opt_D = optim.Adam(D.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    #                                ↑ DCGAN 标配参数
+    loss_fn = nn.BCELoss()
 
-        # 假样本：生成器伪造的 ×2，判别器应该判为 0
-        fake = G(x_real).detach()                          # (128, 9)
-        #        ↑ .detach(): 不让梯度流回生成器，只训判别器
-        fake_pred = D(fake)                                # (128, 1)
-        loss_D_fake = loss_fn(fake_pred, torch.zeros(128, 1))
-        #                                    ↑ 假样本标签=0
+    print(f"Fashion MNIST DCGAN | 设备: {device}\n")
 
-        loss_D = loss_D_real + loss_D_fake
-        opt_D.zero_grad()
-        loss_D.backward()
-        opt_D.step()
+    for epoch in range(30):
+        total_D, total_G = 0, 0
+        for real_img, _ in loader:
+            B = real_img.size(0)
+            real_img = real_img.to(device)
 
-        # ===== ② 训练生成器 =====
-        # 生成器目标：骗过判别器，让它判为 1
-        fake = G(x_real)                                    # (128, 9)
-        fake_pred = D(fake)                                 # (128, 1)
-        loss_G = loss_fn(fake_pred, torch.ones(128, 1))
-        #                              ↑ 假的也要骗判别器说=1
+            # ===== ① 训 D: 真→1, 假→0 =====
+            # 真图
+            real_pred = D(real_img)                     # (B, 1)
+            loss_D_real = loss_fn(real_pred, torch.ones(B, 1, device=device))
 
-        opt_G.zero_grad()
-        loss_G.backward()
-        opt_G.step()
+            # 假图
+            z = torch.randn(B, noise_dim, 1, 1, device=device)
+            fake_img = G(z).detach()                    # detach: 只训 D
+            fake_pred = D(fake_img)
+            loss_D_fake = loss_fn(fake_pred, torch.zeros(B, 1, device=device))
 
-        # ---- 日志 ----
-        if epoch % 500 == 0:
-            print(f"Epoch {epoch:4d} | "
-                  f"D_loss:{loss_D.item():.4f} | "
-                  f"G_loss:{loss_G.item():.4f}")
+            loss_D = loss_D_real + loss_D_fake
+            opt_D.zero_grad()
+            loss_D.backward()
+            opt_D.step()
 
-    print("训练完成！\n")
+            # ===== ② 训 G: 假图→让 D 判为 1 =====
+            z = torch.randn(B, noise_dim, 1, 1, device=device)
+            fake_img = G(z)                              # 不 detach，训 G
+            fake_pred = D(fake_img)
+            loss_G = loss_fn(fake_pred, torch.ones(B, 1, device=device))
+
+            opt_G.zero_grad()
+            loss_G.backward()
+            opt_G.step()
+
+            total_D += loss_D.item()
+            total_G += loss_G.item()
+
+        if epoch % 5 == 0:
+            print(f"Epoch {epoch:2d} | D:{total_D/len(loader):.4f} | G:{total_G/len(loader):.4f}")
+
+    print("\n训练完成！")
     return G
 
 
 # ================================================================
-#  5. 测试
+#  4. 生成图片 + 保存
 # ================================================================
-def test(G):
-    """输入一个 3×3 矩阵，看生成器能不能输出 ×2 的结果"""
+def generate_and_save(G, noise_dim=100, num=16, save_path="gan_fashion.png"):
+    """生成 num 张假 Fashion MNIST 图并保存"""
     G.eval()
-
-    # 测试矩阵
-    test_input = torch.tensor([[1.0, 2.0, 3.0],
-                                [4.0, 5.0, 6.0],
-                                [7.0, 8.0, 9.0]])
+    device = next(G.parameters()).device
 
     with torch.no_grad():
-        flat = test_input.view(1, 9)          # (1, 9) 展平
-        output = G(flat).view(3, 3)            # (3, 3) 恢复形状
+        z = torch.randn(num, noise_dim, 1, 1, device=device)
+        fake = G(z).cpu()                           # (16, 1, 28, 28)
 
-    print("=" * 40)
-    print("测试结果")
-    print("=" * 40)
-    print(f"输入矩阵:\n{test_input}\n")
-    print(f"期望 (×2):\n{test_input * 2}\n")
-    print(f"生成器输出:\n{output}\n")
-
-    # 算一下误差
-    target = test_input * 2
-    error = torch.abs(output - target)
-    print(f"绝对误差:\n{error}\n")
-    print(f"平均误差: {error.mean().item():.4f}")
-
-    # ===== 你也可以自己输入 =====
-    print("\n" + "=" * 40)
-    print("手动测试（输入 -1 退出）")
-    while True:
-        try:
-            s = input("\n输入 9 个数字（空格分隔）: ").strip()
-            if s == "-1":
-                break
-            nums = [float(x) for x in s.split()]
-            if len(nums) != 9:
-                print("要输入 9 个数！")
-                continue
-            inp = torch.tensor(nums).view(1, 9)
-            with torch.no_grad():
-                out = G(inp).view(3, 3)
-            print(f"生成器输出:\n{out}")
-        except (ValueError, EOFError, KeyboardInterrupt):
-            break
+    # 画 4×4 网格
+    fig, axes = plt.subplots(4, 4, figsize=(6, 6))
+    for i, ax in enumerate(axes.flat):
+        ax.imshow(fake[i, 0], cmap="gray")
+        ax.axis("off")
+    plt.suptitle("GAN 生成的 Fashion MNIST", fontsize=14)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=100)
+    plt.show()
+    print(f"图片已保存到 {save_path}")
 
 
 # ================================================================
-#  6. 运行
+#  5. 运行
 # ================================================================
 if __name__ == "__main__":
     torch.manual_seed(42)
     G = train()
-    test(G)
+    generate_and_save(G)
